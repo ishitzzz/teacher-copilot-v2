@@ -1,10 +1,9 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { SCHOOL_DATA, TEACHERS, Student } from "@/app/data"; 
+import { SCHOOL_DATA, TEACHERS, Student } from "@/app/data";
 import { NextResponse } from "next/server";
+import { generateWithFailover } from "@/lib/gemini";
 
 // --- CONFIGURATION ---
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY; 
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // --- SAFETY NET IMAGES (Guaranteed to work for Demo) ---
 const TOPIC_IMAGES: { [key: string]: string } = {
@@ -59,33 +58,36 @@ const cleanHTML = (text: string) => {
 };
 
 const cleanText = (text: string) => {
-  return text.replace(/\*\*/g, "").replace(/##/g, "").replace(/\$\$/g, "").replace(/\$/g, "").trim();
+  return text.trim();
 };
 
 export async function POST(req: Request) {
+
   try {
     const body = await req.json();
-    const { action } = body; 
-    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+    const { action } = body;
 
     if (action === "chat") {
       const { currentPlan, userQuestion } = body;
-      const result = await model.generateContent({
-        contents: [{ role: "user", parts: [{ text: `
-          Role: 'Gemini Nano Banana Pro'. Tone: Calm, simple, empathetic.
+      const result = await generateWithFailover({
+        contents: [{
+          role: "user", parts: [{
+            text: `
+          Role: 'Expert Educational Co-pilot'. Tone: Calm, simple, empathetic.
           Rule: If input is Hindi, reply in Hinglish.
           Context: "${currentPlan?.title}". Question: "${userQuestion}".
-        ` }] }]
+        ` }]
+        }]
       });
       return NextResponse.json({ reply: cleanText(result.response.text()) });
     }
 
     if (action === "plan") {
       const { query, className, subject, teacherId } = body;
-      
+
       const isHeartTopic = query.toLowerCase().includes("heart") || query.toLowerCase().includes("dil");
-      
-      let visualType = "image"; 
+
+      let visualType = "image";
       if (subject === "Math" || subject === "Physics" || query.toLowerCase().includes("motion") || query.toLowerCase().includes("force")) {
         visualType = "simulation";
       }
@@ -96,7 +98,7 @@ export async function POST(req: Request) {
       const toppers = classContext.students.filter((s: Student) => s.category === "High Performer").slice(0, 3).map((s: Student) => s.name);
 
       const systemPrompt = `
-        ACT AS: Gemini Nano Banana Pro.
+        ACT AS: Expert Educational Co-pilot.
         TARGET: Rural Teacher (${teacher.name}).
         TOPIC: "${query}" in ${subject}.
 
@@ -126,11 +128,11 @@ export async function POST(req: Request) {
         }
       `;
 
-      const result = await model.generateContent({
+      const result = await generateWithFailover({
         contents: [{ role: "user", parts: [{ text: systemPrompt }] }],
         generationConfig: { responseMimeType: "application/json" }
       });
-      
+
       const jsonStr = cleanJSON(result.response.text());
       const planData = JSON.parse(jsonStr);
 
@@ -138,19 +140,19 @@ export async function POST(req: Request) {
       if (planData.visual_type === "image") {
         // 1. Try Safety Net First (Fastest & Guaranteed)
         if (planData.visual_keyword) {
-           const key = planData.visual_keyword.toLowerCase();
-           if (TOPIC_IMAGES[key]) planData.visual_url = TOPIC_IMAGES[key];
+          const key = planData.visual_keyword.toLowerCase();
+          if (TOPIC_IMAGES[key]) planData.visual_url = TOPIC_IMAGES[key];
         }
 
         // 2. If no Safety Net, try DALL-E (Real AI)
         if (!planData.visual_url && OPENAI_API_KEY) {
-           const dalleUrl = await generateDalleImage(planData.visual_prompt);
-           if (dalleUrl) planData.visual_url = dalleUrl;
+          const dalleUrl = await generateDalleImage(planData.visual_prompt);
+          if (dalleUrl) planData.visual_url = dalleUrl;
         }
 
         // 3. Last Resort: Reliable Placeholder
         if (!planData.visual_url) {
-           planData.visual_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6f/Science_icon.svg/1024px-Science_icon.svg.png";
+          planData.visual_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6f/Science_icon.svg/1024px-Science_icon.svg.png";
         }
       }
 
@@ -165,7 +167,7 @@ export async function POST(req: Request) {
         RULES: Plain HTML + Vanilla JS + Tailwind CSS (CDN). Dark Mode ('bg-slate-900').
         OUTPUT: Only raw HTML string starting with <!DOCTYPE html>.
       `;
-      const result = await model.generateContent({ contents: [{ role: "user", parts: [{ text: codePrompt }] }] });
+      const result = await generateWithFailover({ contents: [{ role: "user", parts: [{ text: codePrompt }] }] });
       return NextResponse.json({ code: cleanHTML(result.response.text()) });
     }
 
